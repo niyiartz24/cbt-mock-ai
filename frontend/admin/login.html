@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Login — CBT Mock AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="../css/style.css" />
+</head>
+<body>
+
+  <div class="login-page">
+    <div class="login-card">
+
+      <div class="login-brand">
+        <div style="display:inline-flex; align-items:center; gap:0.5rem; margin-bottom:0.5rem;">
+          <span style="width:10px; height:10px; background:var(--accent); border-radius:50%; display:inline-block;"></span>
+          <span style="font-family:var(--font-display); font-size:1.5rem; font-weight:700;">CBT Mock AI</span>
+        </div>
+        <p class="brand-label">Administrator Access</p>
+      </div>
+
+      <div id="login-error" class="alert alert-danger hidden" style="margin-bottom:1.25rem;"></div>
+
+      <div style="display:flex; flex-direction:column; gap:1rem;">
+
+        <div class="form-group">
+          <label class="form-label" for="username">Username</label>
+          <input type="text" id="username" class="form-input" placeholder="admin" autocomplete="username" />
+        </div>
+
+        <div class="form-group">
+          <label class="form-label" for="password">Password</label>
+          <input type="password" id="password" class="form-input" placeholder="••••••••" autocomplete="current-password" />
+        </div>
+
+        <button class="btn btn-primary btn-full" id="btn-login" style="margin-top:0.5rem;">
+          Sign In
+        </button>
+
+      </div>
+
+      <p style="text-align:center; margin-top:1.5rem; font-size:0.8rem; color:var(--text-muted);">
+        <a href="../index.html" style="color:var(--text-muted);">Return to student portal</a>
+      </p>
+
+    </div>
+  </div>
+
+  <script src="../js/config.js"></script>
+  <script>
+    initTheme();
+
+    async function login() {
+      const username = document.getElementById('username').value.trim();
+      const password = document.getElementById('password').value.trim();
+      const errEl    = document.getElementById('login-error');
+      const btn      = document.getElementById('btn-login');
+
+      errEl.classList.add('hidden');
+
+      if (!username || !password) {
+        errEl.textContent = 'Please enter your username and password.';
+        errEl.classList.remove('hidden');
+        return;
+      }
+
+      setLoading(btn, true, 'Signing in...');
+
+      try {
+        const data = await API.post('/auth/login', { username, password });
+        Storage.setToken(data.token);
+        window.location.href = 'dashboard.html';
+      } catch (err) {
+        errEl.textContent = err.message || 'Invalid credentials. Please try again.';
+        errEl.classList.remove('hidden');
+        setLoading(btn, false, 'Sign In');
+      }
+    }
+
+    document.getElementById('btn-login').addEventListener('click', login);
+    document.getElementById('password').addEventListener('keydown', e => {
+      if (e.key === 'Enter') login();
+    });
+  </script>
+
+  <!-- SynthaxLab Watermark -->
+  <div class="synthaxlab-watermark">
+    <a class="synthaxlab-watermark-inner" href="https://synthaxlab.netlify.app" target="_blank" rel="noopener">
+      <span class="synthaxlab-watermark-dot"></span>
+      <span class="synthaxlab-watermark-text">
+        <span class="wm-prefix">Built by </span><strong>SynthaxLab</strong>
+      </span>
+    </a>
+  </div>
+
+</body>
+</html>

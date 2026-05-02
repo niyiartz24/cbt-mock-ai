@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Lesson Summary — CBT Mock AI</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="css/style.css" />
+  <style>
+    @media print {
+      .navbar, .summary-meta, #btn-print, #btn-start-exam { display: none !important; }
+      body { background: white; color: black; }
+      .summary-body { border: none; padding: 0; }
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Navbar -->
+  <nav class="navbar">
+    <div class="container navbar-inner">
+      <div style="display:flex; align-items:center; gap:1rem;">
+        <a id="back-link" href="index.html" class="btn btn-ghost btn-sm">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.25rem">
+            <polyline points="15 18 9 12 15 6"/>
+          </svg>
+          Back
+        </a>
+        <span class="navbar-brand" style="font-size:1rem;">
+          <span class="brand-dot"></span>
+          CBT Mock AI
+        </span>
+      </div>
+      <div class="navbar-actions">
+        <button class="theme-toggle" id="theme-toggle" title="Toggle theme">☀</button>
+      </div>
+    </div>
+  </nav>
+
+  <div class="container-sm summary-page">
+
+    <!-- Header -->
+    <div class="summary-meta">
+      <div style="flex:1;">
+        <p style="font-size:0.72rem; text-transform:uppercase; letter-spacing:0.1em; color:var(--text-muted); font-weight:600; margin-bottom:0.3rem;">Lesson Summary</p>
+        <h1 id="course-title" style="font-family:var(--font-display); font-size:1.6rem; font-weight:700; letter-spacing:-0.02em;">Loading...</h1>
+        <p style="font-size:0.78rem; color:var(--text-muted); margin-top:0.25rem;">
+          Last updated: <span id="summary-updated">—</span>
+        </p>
+      </div>
+      <div style="display:flex; gap:0.5rem; flex-shrink:0; flex-wrap:wrap;">
+        <button class="btn btn-ghost btn-sm" id="btn-print">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.25rem">
+            <polyline points="6 9 6 2 18 2 18 9"/><path d="M6 18H4a2 2 0 0 1-2-2v-5a2 2 0 0 1 2-2h16a2 2 0 0 1 2 2v5a2 2 0 0 1-2 2h-2"/><rect x="6" y="14" width="12" height="8"/>
+          </svg>
+          Print
+        </button>
+        <button class="btn btn-primary btn-sm hidden" id="btn-start-exam">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-right:0.25rem">
+            <polygon points="5 3 19 12 5 21 5 3"/>
+          </svg>
+          Take Exam
+        </button>
+      </div>
+    </div>
+
+    <!-- Summary body -->
+    <div class="summary-body">
+      <div id="summary-content-area"></div>
+    </div>
+
+  </div>
+
+  <script src="js/config.js"></script>
+  <script src="js/summary.js"></script>
+
+  <!-- SynthaxLab Watermark -->
+  <div class="synthaxlab-watermark">
+    <a class="synthaxlab-watermark-inner" href="https://synthaxlab.netlify.app" target="_blank" rel="noopener">
+      <span class="synthaxlab-watermark-dot"></span>
+      <span class="synthaxlab-watermark-text">
+        <span class="wm-prefix">Built by </span><strong>SynthaxLab</strong>
+      </span>
+    </a>
+  </div>
+
+</body>
+</html>
