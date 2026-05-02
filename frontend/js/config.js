@@ -4,7 +4,7 @@
 // ============================================================
 
 const CONFIG = {
-  API_BASE: 'http://localhost:5000/api',
+  API_BASE: 'https://cbt-mock-ai.onrender.com/api',
   // Example production: API_BASE: 'https://cbt-mock-api.onrender.com/api',
 };
 
