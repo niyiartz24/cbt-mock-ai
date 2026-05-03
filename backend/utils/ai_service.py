@@ -1,23 +1,13 @@
 """
 CBT Mock AI — AI Service
-Supports three providers, selected via the AI_PROVIDER env variable:
-
-  AI_PROVIDER=groq    (default) — Free. Fast. Uses Llama 3.3 70B.
-                                   Get key: https://console.groq.com
-  AI_PROVIDER=gemini             — Free tier. Uses Gemini 1.5 Flash.
-                                   Get key: https://aistudio.google.com
-  AI_PROVIDER=openai             — Paid. Uses GPT-4o-mini.
-                                   Get key: https://platform.openai.com
-
-Set the corresponding key in your .env:
-  GROQ_API_KEY=gsk_...
-  GEMINI_API_KEY=AIza...
-  OPENAI_API_KEY=sk-...
+Supports: groq (default/free), gemini (free), openai (paid)
+Set AI_PROVIDER + the matching key in .env.
 """
 
 import json
 import re
 import os
+import time
 from typing import List, Dict, Tuple
 
 PROVIDER_MODELS = {
@@ -27,6 +17,8 @@ PROVIDER_MODELS = {
 }
 
 
+# ── Provider dispatch ──────────────────────────────────────────
+
 def _get_provider() -> str:
     return os.getenv('AI_PROVIDER', 'groq').strip().lower()
 
@@ -35,14 +27,9 @@ def _get_openai_compatible_client(api_key: str, base_url: str, provider: str):
     try:
         from openai import OpenAI
     except ImportError:
-        raise ImportError(
-            "The 'openai' package is required for Groq and OpenAI providers.\n"
-            "Run: pip install openai"
-        )
+        raise ImportError("Run: pip install openai")
     if not api_key:
-        raise ValueError(
-            f"{provider.upper()}_API_KEY is not set. Add it to your .env file."
-        )
+        raise ValueError(f"{provider.upper()}_API_KEY is not set in your .env file.")
     return OpenAI(api_key=api_key, base_url=base_url)
 
 
@@ -60,26 +47,13 @@ def _call_gemini(api_key: str, prompt: str, temperature: float, max_tokens: int)
     try:
         import google.generativeai as genai
     except ImportError:
-        raise ImportError(
-            "The 'google-generativeai' package is required for Gemini.\n"
-            "Run: pip install google-generativeai"
-        )
+        raise ImportError("Run: pip install google-generativeai")
     if not api_key:
-        raise ValueError(
-            "GEMINI_API_KEY is not set. Add it to your .env file.\n"
-            "Get a free key at: https://aistudio.google.com"
-        )
+        raise ValueError("GEMINI_API_KEY is not set in your .env file.")
     genai.configure(api_key=api_key)
-    generation_config = genai.types.GenerationConfig(
-        temperature=temperature,
-        max_output_tokens=max_tokens,
-    )
-    model = genai.GenerativeModel(
-        model_name=PROVIDER_MODELS['gemini'],
-        generation_config=generation_config,
-    )
-    response = model.generate_content(prompt)
-    return response.text
+    cfg = genai.types.GenerationConfig(temperature=temperature, max_output_tokens=max_tokens)
+    model = genai.GenerativeModel(model_name=PROVIDER_MODELS['gemini'], generation_config=cfg)
+    return model.generate_content(prompt).text
 
 
 def _call_ai(prompt: str, temperature: float, max_tokens: int) -> str:
@@ -87,33 +61,22 @@ def _call_ai(prompt: str, temperature: float, max_tokens: int) -> str:
 
     if provider == 'groq':
         client = _get_openai_compatible_client(
-            api_key=os.getenv('GROQ_API_KEY', ''),
-            base_url='https://api.groq.com/openai/v1',
-            provider='groq',
-        )
+            os.getenv('GROQ_API_KEY', ''), 'https://api.groq.com/openai/v1', 'groq')
         return _call_openai_compatible(client, PROVIDER_MODELS['groq'], prompt, temperature, max_tokens)
 
     elif provider == 'gemini':
-        return _call_gemini(
-            api_key=os.getenv('GEMINI_API_KEY', ''),
-            prompt=prompt,
-            temperature=temperature,
-            max_tokens=max_tokens,
-        )
+        return _call_gemini(os.getenv('GEMINI_API_KEY', ''), prompt, temperature, max_tokens)
 
     elif provider == 'openai':
         client = _get_openai_compatible_client(
-            api_key=os.getenv('OPENAI_API_KEY', ''),
-            base_url='https://api.openai.com/v1',
-            provider='openai',
-        )
+            os.getenv('OPENAI_API_KEY', ''), 'https://api.openai.com/v1', 'openai')
         return _call_openai_compatible(client, PROVIDER_MODELS['openai'], prompt, temperature, max_tokens)
 
     else:
-        raise ValueError(
-            f"Unknown AI_PROVIDER: '{provider}'. Must be one of: groq, gemini, openai"
-        )
+        raise ValueError(f"Unknown AI_PROVIDER: '{provider}'. Must be: groq, gemini, openai")
 
+
+# ── Helpers ────────────────────────────────────────────────────
 
 def _clean_json_response(raw: str) -> str:
     raw = raw.strip()
@@ -124,129 +87,201 @@ def _clean_json_response(raw: str) -> str:
 
 
 def _validate_questions(raw_list: list) -> List[Dict]:
-    required_keys = {'question', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer'}
+    required = {'question', 'option_a', 'option_b', 'option_c', 'option_d', 'correct_answer'}
     valid_answers = {'A', 'B', 'C', 'D'}
     validated = []
-    seen_questions = set()
+    seen = set()
 
     for item in raw_list:
-        if not isinstance(item, dict):
-            continue
-        if not required_keys.issubset(item.keys()):
+        if not isinstance(item, dict) or not required.issubset(item.keys()):
             continue
         q_text = str(item['question']).strip()
         answer = str(item.get('correct_answer', '')).strip().upper()
-        if not q_text or len(q_text) < 10:
+        if len(q_text) < 10 or answer not in valid_answers:
             continue
-        if answer not in valid_answers:
+        if q_text.lower() in seen:
             continue
-        if q_text.lower() in seen_questions:
-            continue
-        seen_questions.add(q_text.lower())
+        seen.add(q_text.lower())
         validated.append({
-            'question': q_text,
-            'option_a': str(item['option_a']).strip(),
-            'option_b': str(item['option_b']).strip(),
-            'option_c': str(item['option_c']).strip(),
-            'option_d': str(item['option_d']).strip(),
+            'question':       q_text,
+            'option_a':       str(item['option_a']).strip(),
+            'option_b':       str(item['option_b']).strip(),
+            'option_c':       str(item['option_c']).strip(),
+            'option_d':       str(item['option_d']).strip(),
             'correct_answer': answer,
-            'explanation': str(item.get('explanation', '')).strip(),
+            'explanation':    str(item.get('explanation', '')).strip(),
         })
-
     return validated
 
 
-def generate_questions(text: str, course_name: str, api_key: str = '') -> Tuple[List[Dict], str]:
-    """
-    Generate MCQ questions from extracted PDF text.
-    Returns (questions_list, warning_message).
-    api_key param kept for backwards compatibility — provider/key come from env.
-    """
-    prompt = f"""You are an expert Nigerian university lecturer creating a Computer-Based Test (CBT) for the course: "{course_name}".
+def _questions_prompt(text: str, course_name: str, count: int = 20) -> str:
+    return f"""You are an expert Nigerian university lecturer creating a CBT for: "{course_name}".
 
-Study the following lesson content carefully, then generate exactly 55 multiple-choice questions.
+Generate exactly {count} multiple-choice questions from the content below.
 
-STRICT REQUIREMENTS:
-1. Every question must be clearly derived from the provided content
-2. Each question has exactly 4 options (A, B, C, D) — only ONE is correct
-3. No duplicate or near-duplicate questions
-4. Vary difficulty: 30% easy, 50% medium, 20% hard
-5. Correct answers must be distributed fairly across A, B, C, D
-6. Include a brief explanation for each correct answer
-7. Questions must be clearly worded with no ambiguity
+REQUIREMENTS:
+- Every question must come directly from this content
+- Each question has 4 options (A, B, C, D) — only ONE correct
+- No duplicate questions
+- Vary difficulty: easy / medium / hard
+- Spread correct answers across A, B, C, D
+- Include a one-sentence explanation per question
+- Clear, unambiguous wording
 
-LESSON CONTENT:
+CONTENT:
 {text}
 
-RESPONSE FORMAT — Output ONLY a valid JSON array, no preamble, no markdown fences:
+Output ONLY a valid JSON array — no preamble, no markdown:
 [
   {{
-    "question": "The full question text goes here?",
+    "question": "Question text?",
     "option_a": "First option",
     "option_b": "Second option",
     "option_c": "Third option",
     "option_d": "Fourth option",
     "correct_answer": "A",
-    "explanation": "Option A is correct because..."
+    "explanation": "Because..."
   }}
 ]"""
 
-    raw = _call_ai(prompt, temperature=0.6, max_tokens=10000)
-    cleaned = _clean_json_response(raw)
+
+def _summary_prompt(text: str, course_name: str) -> str:
+    return f"""You are an expert academic summariser creating study notes for: "{course_name}".
+
+CONTENT:
+{text}
+
+Return ONLY valid HTML — no explanation, no markdown fences:
+<div class="summary-content">
+  <h2>Topic</h2>
+  <p>Introduction...</p>
+  <h3>Subtopic</h3>
+  <ul>
+    <li><strong>Key term</strong>: explanation</li>
+  </ul>
+</div>
+
+Rules: h2 for major topics, h3 for subtopics, ul/li for bullets, strong for key terms.
+Cover ALL major concepts. Do not add an intro sentence about this being a summary."""
+
+
+# ── Public API ─────────────────────────────────────────────────
+
+def generate_questions(text: str, course_name: str, api_key: str = '') -> Tuple[List[Dict], str]:
+    """
+    Generate MCQ questions from PDF text.
+    Automatically splits large texts into chunks to stay within provider TPM limits.
+    Returns (questions_list, warning_message).
+    """
+    from utils.pdf_parser import split_into_chunks
+
+    chunks = split_into_chunks(text)
+    print(f"[AI] Generating questions from {len(chunks)} chunk(s) of text")
+
+    # Questions per chunk — aim for ~20 per chunk so combined = 50-60
+    questions_per_chunk = max(20, 55 // len(chunks))
+
+    all_questions: List[Dict] = []
+    seen_questions = set()
+
+    for i, chunk in enumerate(chunks):
+        print(f"[AI] Processing chunk {i+1}/{len(chunks)} ({len(chunk)} chars)...")
+
+        prompt = _questions_prompt(chunk, course_name, count=questions_per_chunk)
+        try:
+            raw = _call_ai(prompt, temperature=0.6, max_tokens=6000)
+        except Exception as e:
+            print(f"[AI] Chunk {i+1} failed: {e}")
+            # Don't fail the whole job if one chunk errors — continue
+            continue
+
+        cleaned = _clean_json_response(raw)
+        try:
+            raw_list = json.loads(cleaned)
+            chunk_questions = _validate_questions(raw_list)
+        except json.JSONDecodeError as e:
+            print(f"[AI] Chunk {i+1} JSON parse error: {e}")
+            continue
+
+        # Cross-chunk deduplication
+        for q in chunk_questions:
+            key = q['question'].lower()
+            if key not in seen_questions:
+                seen_questions.add(key)
+                all_questions.append(q)
+
+        print(f"[AI] Chunk {i+1}: {len(chunk_questions)} questions generated, "
+              f"{len(all_questions)} total so far")
+
+        # Small delay between chunks to respect rate limits
+        if i < len(chunks) - 1:
+            time.sleep(2)
 
     warning = ""
-    try:
-        raw_list = json.loads(cleaned)
-        questions = _validate_questions(raw_list)
-    except json.JSONDecodeError as e:
-        raise ValueError(
-            f"AI returned malformed JSON: {e}. "
-            f"Raw response (first 500 chars): {cleaned[:500]}"
-        )
-
-    if len(questions) < 40:
+    if len(all_questions) < 40:
         warning = (
-            f"Only {len(questions)} valid questions were generated "
-            f"(minimum 40 required to publish). "
-            "Consider uploading richer content."
+            f"Only {len(all_questions)} valid questions were generated "
+            f"(minimum 40 needed to publish). Upload richer content for better results."
         )
 
-    return questions, warning
+    return all_questions, warning
 
 
 def generate_summary(text: str, course_name: str, api_key: str = '') -> str:
     """
-    Generate a structured HTML summary from extracted PDF text.
-    Returns HTML string.
-    api_key param kept for backwards compatibility — provider/key come from env.
+    Generate a structured HTML summary.
+    For large texts, summarises each chunk then merges into one final summary.
     """
-    prompt = f"""You are an expert academic summariser creating structured study notes for the course: "{course_name}".
+    from utils.pdf_parser import split_into_chunks
 
-Analyse the following lesson content and produce comprehensive, well-organised study notes that a student can use for revision.
+    chunks = split_into_chunks(text)
+    print(f"[AI] Generating summary from {len(chunks)} chunk(s)")
 
-LESSON CONTENT:
-{text}
+    if len(chunks) == 1:
+        # Simple path — single call
+        prompt = _summary_prompt(chunks[0], course_name)
+        raw = _call_ai(prompt, temperature=0.4, max_tokens=4000)
+        return _clean_html(raw)
 
-OUTPUT FORMAT — Return ONLY valid HTML, no explanation, no markdown:
-<div class="summary-content">
-  <h2>Topic Name</h2>
-  <p>Brief introduction...</p>
-  <h3>Subtopic</h3>
-  <ul>
-    <li><strong>Key term</strong>: Definition or explanation</li>
-  </ul>
-</div>
+    # Multi-chunk: summarise each chunk, then merge
+    partial_summaries = []
+    for i, chunk in enumerate(chunks):
+        print(f"[AI] Summarising chunk {i+1}/{len(chunks)}...")
+        prompt = _summary_prompt(chunk, course_name)
+        try:
+            raw = _call_ai(prompt, temperature=0.4, max_tokens=3000)
+            partial_summaries.append(_clean_html(raw))
+        except Exception as e:
+            print(f"[AI] Summary chunk {i+1} failed: {e}")
 
-RULES:
-- Use <h2> for major topics, <h3> for subtopics
-- Use <ul><li> for bullet points and lists
-- Bold key terms with <strong>
-- Use <p> for explanatory paragraphs
-- Cover ALL major concepts from the content
-- Be comprehensive but avoid unnecessary repetition
-- Do NOT include an introduction or conclusion about this being a summary"""
+        if i < len(chunks) - 1:
+            time.sleep(2)
 
-    raw = _call_ai(prompt, temperature=0.4, max_tokens=4000)
+    if not partial_summaries:
+        raise ValueError("Summary generation failed for all chunks.")
+
+    if len(partial_summaries) == 1:
+        return partial_summaries[0]
+
+    # Merge partial summaries into one clean document
+    combined = "\n\n".join(partial_summaries)
+    merge_prompt = f"""You are an academic editor. Merge these partial HTML study note sections for "{course_name}" into one clean, non-repetitive HTML document.
+
+{combined}
+
+Return ONLY a single merged HTML block using h2, h3, p, ul, li, strong — no duplicates, no markdown fences."""
+
+    try:
+        print("[AI] Merging partial summaries...")
+        time.sleep(2)
+        raw = _call_ai(merge_prompt, temperature=0.3, max_tokens=4000)
+        return _clean_html(raw)
+    except Exception:
+        # If merge fails, just concatenate the partials
+        return "\n".join(partial_summaries)
+
+
+def _clean_html(raw: str) -> str:
     content = raw.strip()
     content = re.sub(r'^```html\s*', '', content, flags=re.IGNORECASE)
     content = re.sub(r'\s*```$', '', content)
@@ -254,10 +289,9 @@ RULES:
 
 
 def get_active_provider() -> Dict:
-    """Return info about the currently configured AI provider."""
     provider = _get_provider()
     return {
         'provider': provider,
-        'model': PROVIDER_MODELS.get(provider, 'unknown'),
-        'free': provider in ('groq', 'gemini'),
+        'model':    PROVIDER_MODELS.get(provider, 'unknown'),
+        'free':     provider in ('groq', 'gemini'),
     }
