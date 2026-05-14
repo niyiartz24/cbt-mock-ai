@@ -7,3 +7,4 @@ PyMuPDF
 pdfplumber
 openai
 gunicorn
+ google-generativeai
