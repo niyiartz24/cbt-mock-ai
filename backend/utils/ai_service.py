@@ -24,17 +24,20 @@ def _get_provider() -> str:
 
 
 def _call_gemini(api_key: str, prompt: str, temperature: float, max_tokens: int) -> str:
-    try:
-        import google.generativeai as genai
-    except ImportError:
-        raise ImportError("Run: pip install google-generativeai")
+    """
+    Calls Gemini via Google's OpenAI-compatible endpoint.
+    Same free API key from aistudio.google.com — no extra SDK needed.
+    """
     if not api_key:
         raise ValueError("GEMINI_API_KEY is not set in your .env file.\nGet a free key at: https://aistudio.google.com")
-    genai.configure(api_key=api_key)
-    cfg = genai.types.GenerationConfig(temperature=temperature, max_output_tokens=max_tokens)
-    model = genai.GenerativeModel(model_name=PROVIDER_MODELS['gemini'], generation_config=cfg)
-    response = model.generate_content(prompt)
-    return response.text
+    return _call_openai_compatible(
+        api_key=api_key,
+        base_url='https://generativelanguage.googleapis.com/v1beta/openai/',
+        model=PROVIDER_MODELS['gemini'],
+        prompt=prompt,
+        temperature=temperature,
+        max_tokens=max_tokens,
+    )
 
 
 def _call_openai_compatible(api_key: str, base_url: str, model: str, prompt: str, temperature: float, max_tokens: int) -> str:
