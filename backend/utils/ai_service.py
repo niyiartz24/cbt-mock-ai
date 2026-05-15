@@ -1,6 +1,6 @@
 """
 CBT Mock AI — AI Service
-Default: gemini-2.5-flash-lite (free, 1500 req/day, 15 RPM)
+Default: gemini-2.5-flash (free, stable, 1500 req/day)
 """
 
 import json
@@ -40,21 +40,12 @@ def _call_openai_compatible(api_key: str, base_url: str, model: str,
 
 
 def _call_ai(prompt: str, temperature: float, max_tokens: int) -> str:
-    """
-    Call the configured AI provider.
-    NO sleep/retry — Gunicorn sync workers timeout at 30s and get SIGKILL.
-    Rate limit errors surface immediately with a clear human-readable message.
-    """
     provider = _get_provider()
-
     try:
         if provider == 'gemini':
             api_key = os.getenv('GEMINI_API_KEY', '')
             if not api_key:
-                raise ValueError(
-                    "GEMINI_API_KEY is not set. "
-                    "Get a free key at: https://aistudio.google.com"
-                )
+                raise ValueError("GEMINI_API_KEY is not set. Get a free key at: https://aistudio.google.com")
             return _call_openai_compatible(
                 api_key=api_key,
                 base_url='https://generativelanguage.googleapis.com/v1beta/openai/',
@@ -63,7 +54,6 @@ def _call_ai(prompt: str, temperature: float, max_tokens: int) -> str:
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-
         elif provider == 'groq':
             return _call_openai_compatible(
                 api_key=os.getenv('GROQ_API_KEY', ''),
@@ -73,7 +63,6 @@ def _call_ai(prompt: str, temperature: float, max_tokens: int) -> str:
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-
         elif provider == 'openai':
             return _call_openai_compatible(
                 api_key=os.getenv('OPENAI_API_KEY', ''),
@@ -83,51 +72,109 @@ def _call_ai(prompt: str, temperature: float, max_tokens: int) -> str:
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
-
         else:
-            raise ValueError(
-                f"Unknown AI_PROVIDER: '{provider}'. Must be: gemini, groq, openai"
-            )
+            raise ValueError(f"Unknown AI_PROVIDER: '{provider}'. Must be: gemini, groq, openai")
 
     except Exception as e:
         err_str = str(e)
-
-        # Per-minute rate limit
         if any(x in err_str.lower() for x in ['per minute', 'tpm', '413']):
-            raise Exception(
-                f"Rate limit (per-minute) hit on {provider.upper()}. "
-                f"Wait 60 seconds and try again."
-            )
-
-        # Daily / quota exhausted
-        if any(x in err_str.lower() for x in [
-            'per day', 'quota exceeded', 'resource_exhausted',
-            'limit: 0', 'exceeded your current quota'
-        ]):
+            raise Exception(f"Rate limit (per-minute) hit on {provider.upper()}. Wait 60s and retry.")
+        if any(x in err_str.lower() for x in ['per day', 'quota exceeded', 'resource_exhausted', 'limit: 0', 'exceeded your current quota']):
             match = re.search(r'retry in ([\d\.]+)s', err_str, re.IGNORECASE)
             wait = f" Retry in {match.group(1)}s." if match else ""
             raise Exception(
                 f"Daily quota exhausted for {provider.upper()}.{wait} "
-                f"Options: (1) Wait for quota reset, "
-                f"(2) Create a fresh API key at aistudio.google.com, "
+                f"Options: (1) Wait for reset, (2) New API key from aistudio.google.com, "
                 f"(3) Set AI_PROVIDER=groq with a new GROQ_API_KEY from console.groq.com"
             )
-
         raise
 
 
-# ── Helpers ────────────────────────────────────────────────────
+# ── JSON extraction ────────────────────────────────────────────
 
-def _clean_json_response(raw: str) -> str:
-    raw = raw.strip()
-    raw = re.sub(r'^```json\s*', '', raw, flags=re.IGNORECASE)
-    raw = re.sub(r'^```\s*', '', raw)
-    raw = re.sub(r'\s*```$', '', raw)
-    return raw.strip()
+def _extract_json_array(raw: str) -> list:
+    """
+    Robustly extract a JSON array from AI response.
+    Handles: markdown fences, thinking tags, preamble text,
+    nested content, and Gemini 2.5's verbose reasoning output.
+    """
+    if not raw:
+        raise ValueError("AI returned empty response")
+
+    print(f"[AI] Raw response length: {len(raw)} chars")
+    print(f"[AI] Raw response preview: {raw[:300]}")
+
+    # Step 1: Strip <think>...</think> blocks (Gemini 2.5 reasoning output)
+    text = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL | re.IGNORECASE)
+
+    # Step 2: Strip markdown fences
+    text = re.sub(r'```json\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'```\s*', '', text)
+    text = text.strip()
+
+    # Step 3: Try parsing the whole cleaned string
+    try:
+        result = json.loads(text)
+        if isinstance(result, list):
+            print(f"[AI] JSON parsed directly: {len(result)} items")
+            return result
+    except json.JSONDecodeError:
+        pass
+
+    # Step 4: Find JSON array using bracket matching
+    start = text.find('[')
+    if start == -1:
+        raise ValueError(f"No JSON array found in response. Preview: {text[:300]}")
+
+    depth = 0
+    in_string = False
+    escape_next = False
+    end = -1
+
+    for i, ch in enumerate(text[start:], start):
+        if escape_next:
+            escape_next = False
+            continue
+        if ch == '\\' and in_string:
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            continue
+        if in_string:
+            continue
+        if ch == '[':
+            depth += 1
+        elif ch == ']':
+            depth -= 1
+            if depth == 0:
+                end = i + 1
+                break
+
+    if end == -1:
+        raise ValueError(f"Incomplete JSON array in response. Preview: {text[start:start+300]}")
+
+    json_str = text[start:end]
+
+    # Step 5: Clean common AI formatting issues inside the JSON
+    # Remove trailing commas before ] or }
+    json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
+
+    try:
+        result = json.loads(json_str)
+        if isinstance(result, list):
+            print(f"[AI] JSON extracted via bracket matching: {len(result)} items")
+            return result
+    except json.JSONDecodeError as e:
+        raise ValueError(f"JSON parse failed: {e}. Extracted: {json_str[:300]}")
+
+    raise ValueError("Could not extract valid JSON array from response")
 
 
 def _clean_html(raw: str) -> str:
     content = raw.strip()
+    # Strip thinking blocks
+    content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL | re.IGNORECASE)
     content = re.sub(r'^```html\s*', '', content, flags=re.IGNORECASE)
     content = re.sub(r'\s*```$', '', content)
     return content.strip()
@@ -161,7 +208,6 @@ def _validate_questions(raw_list: list) -> List[Dict]:
 
 
 def _clean_extracted_text(text: str) -> str:
-    """Strip OCR noise: page numbers, duplicate lines, excessive whitespace."""
     text = re.sub(r'\r\n|\r', '\n', text)
     lines = text.split('\n')
     cleaned = []
@@ -188,32 +234,32 @@ def _clean_extracted_text(text: str) -> str:
 # ── Prompts ────────────────────────────────────────────────────
 
 def _questions_prompt(text: str, course_name: str, count: int) -> str:
-    return f"""You are an expert Nigerian university lecturer creating a CBT exam for: "{course_name}".
+    return f"""You are a Nigerian university lecturer generating CBT exam questions for: "{course_name}".
 
-The content may be from scanned documents or slides — formatting may be imperfect.
-Generate exactly {count} multiple-choice questions from the educational concepts below.
+Read the content carefully and generate exactly {count} multiple-choice questions.
 
-REQUIREMENTS:
-- Questions must come directly from the content
-- Each question has exactly 4 options (A, B, C, D) — only ONE correct
+STRICT RULES:
+- Base every question on the content provided
+- Each question has exactly 4 options: A, B, C, D — only ONE is correct
 - No duplicate questions
 - Mix difficulty: easy, medium, hard
-- Spread correct answers across A, B, C, D evenly
-- One-sentence explanation per question
+- Distribute correct answers evenly across A, B, C, D
+- One short explanation per question
 
 CONTENT:
 {text}
 
-Output ONLY a valid JSON array — no preamble, no markdown fences:
+YOU MUST RESPOND WITH ONLY A JSON ARRAY. NO INTRODUCTION. NO EXPLANATION. NO MARKDOWN. JUST THE RAW JSON ARRAY STARTING WITH [ AND ENDING WITH ]:
+
 [
   {{
-    "question": "Question text?",
-    "option_a": "First",
-    "option_b": "Second",
-    "option_c": "Third",
-    "option_d": "Fourth",
+    "question": "Question text here?",
+    "option_a": "First option",
+    "option_b": "Second option",
+    "option_c": "Third option",
+    "option_d": "Fourth option",
     "correct_answer": "A",
-    "explanation": "Because..."
+    "explanation": "Short reason."
   }}
 ]"""
 
@@ -221,12 +267,14 @@ Output ONLY a valid JSON array — no preamble, no markdown fences:
 def _summary_prompt(text: str, course_name: str) -> str:
     return f"""You are an academic summariser creating study notes for: "{course_name}".
 
-Content may be from scanned documents or slides — extract all key educational concepts.
+Read the content and produce structured study notes.
 
 CONTENT:
 {text}
 
-Return ONLY valid HTML — no markdown fences:
+Respond with ONLY valid HTML using these tags: h2, h3, p, ul, li, strong.
+No markdown. No explanation. Start directly with <div class="summary-content">:
+
 <div class="summary-content">
   <h2>Topic</h2>
   <p>Introduction...</p>
@@ -234,16 +282,12 @@ Return ONLY valid HTML — no markdown fences:
   <ul>
     <li><strong>Key term</strong>: explanation</li>
   </ul>
-</div>
-
-Use h2 for major topics, h3 for subtopics, ul/li for lists, strong for key terms.
-Cover ALL major concepts. No intro/outro sentences."""
+</div>"""
 
 
 # ── Public API ─────────────────────────────────────────────────
 
 def generate_questions(text: str, course_name: str, api_key: str = '') -> Tuple[List[Dict], str]:
-    """Generate MCQs from PDF text, split into chunks for large documents."""
     from utils.pdf_parser import split_into_chunks
 
     text = _clean_extracted_text(text)
@@ -251,7 +295,7 @@ def generate_questions(text: str, course_name: str, api_key: str = '') -> Tuple[
         return [], "Extracted text too short to generate questions."
 
     chunks = split_into_chunks(text)
-    print(f"[AI] Questions: {len(chunks)} chunk(s), {len(text)} total chars")
+    print(f"[AI] Generating questions: {len(chunks)} chunk(s), {len(text)} total chars")
 
     questions_per_chunk = max(20, 55 // len(chunks))
     all_questions: List[Dict] = []
@@ -260,15 +304,14 @@ def generate_questions(text: str, course_name: str, api_key: str = '') -> Tuple[
     for i, chunk in enumerate(chunks):
         print(f"[AI] Questions chunk {i+1}/{len(chunks)} ({len(chunk)} chars)...")
         prompt = _questions_prompt(chunk, course_name, count=questions_per_chunk)
-        raw = _call_ai(prompt, temperature=0.6, max_tokens=6000)
-        cleaned = _clean_json_response(raw)
 
         try:
-            raw_list = json.loads(cleaned)
+            raw = _call_ai(prompt, temperature=0.6, max_tokens=8000)
+            raw_list = _extract_json_array(raw)
             chunk_qs = _validate_questions(raw_list)
-        except json.JSONDecodeError as e:
-            print(f"[AI] Chunk {i+1} JSON error: {e}")
-            chunk_qs = []
+        except Exception as e:
+            print(f"[AI] Chunk {i+1} failed: {type(e).__name__}: {e}")
+            raise
 
         for q in chunk_qs:
             key = q['question'].lower()
@@ -276,7 +319,7 @@ def generate_questions(text: str, course_name: str, api_key: str = '') -> Tuple[
                 seen.add(key)
                 all_questions.append(q)
 
-        print(f"[AI] Chunk {i+1}: {len(chunk_qs)} Qs. Total: {len(all_questions)}")
+        print(f"[AI] Chunk {i+1} done: {len(chunk_qs)} valid questions. Total: {len(all_questions)}")
 
         if i < len(chunks) - 1:
             time.sleep(2)
@@ -285,13 +328,12 @@ def generate_questions(text: str, course_name: str, api_key: str = '') -> Tuple[
     if len(all_questions) < 40:
         warning = (
             f"Only {len(all_questions)} questions generated "
-            f"(40 needed to publish). Upload a longer or clearer document."
+            f"(40 needed to publish). Upload a longer document."
         )
     return all_questions, warning
 
 
 def generate_summary(text: str, course_name: str, api_key: str = '') -> str:
-    """Generate structured HTML study notes from PDF text."""
     from utils.pdf_parser import split_into_chunks
 
     text = _clean_extracted_text(text)
@@ -299,7 +341,7 @@ def generate_summary(text: str, course_name: str, api_key: str = '') -> str:
         return "<div class='summary-content'><p>Insufficient content to generate a summary.</p></div>"
 
     chunks = split_into_chunks(text)
-    print(f"[AI] Summary: {len(chunks)} chunk(s)")
+    print(f"[AI] Generating summary: {len(chunks)} chunk(s)")
 
     if len(chunks) == 1:
         raw = _call_ai(_summary_prompt(chunks[0], course_name), temperature=0.4, max_tokens=4000)
@@ -315,7 +357,7 @@ def generate_summary(text: str, course_name: str, api_key: str = '') -> str:
 
     combined = "\n\n".join(partials)
     merge_prompt = f"""Merge these partial HTML study notes for "{course_name}" into one clean document.
-Remove duplicates. Return ONLY a single HTML block using h2, h3, p, ul, li, strong. No markdown.
+Remove duplicates. Return ONLY a single HTML block. No markdown. No explanation.
 
 {combined}"""
 
@@ -325,7 +367,7 @@ Remove duplicates. Return ONLY a single HTML block using h2, h3, p, ul, li, stro
         raw = _call_ai(merge_prompt, temperature=0.3, max_tokens=4000)
         return _clean_html(raw)
     except Exception as e:
-        print(f"[AI] Merge failed ({e}) — returning concatenated partials")
+        print(f"[AI] Merge failed ({e}) — returning concatenated")
         return "\n".join(partials)
 
 
