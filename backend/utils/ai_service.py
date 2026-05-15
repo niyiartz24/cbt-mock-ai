@@ -10,7 +10,7 @@ import time
 from typing import List, Dict, Tuple
 
 PROVIDER_MODELS = {
-    'gemini': 'gemini-2.5-flash-lite-preview-06-17',
+    'gemini': 'gemini-2.5-flash',
     'groq':   'llama-3.3-70b-versatile',
     'openai': 'gpt-4o-mini',
 }
