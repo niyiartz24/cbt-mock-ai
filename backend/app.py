@@ -12,7 +12,7 @@ from flask_cors import CORS
 
 from config import Config
 from models import db, Course, Question, Summary, TestSession
-from utils.pdf_parser import extract_text_from_pdf, chunk_text
+from utils.pdf_parser import extract_text_from_pdf
 from utils.ai_service import generate_questions, generate_summary
 
 # ---------------------------------------------------------------------------
@@ -218,20 +218,40 @@ def register_routes(app: Flask):
     @require_auth
     def upload_pdf():
         if 'file' not in request.files:
+            app.logger.warning("[upload-pdf] 400: No file in request.files")
             return jsonify({'error': 'No file provided'}), 400
 
         file = request.files['file']
         course_name = request.form.get('course_name', '').strip()
 
+        app.logger.info(f"[upload-pdf] filename={file.filename!r} content_type={file.content_type!r} course={course_name!r}")
+
         if not course_name:
+            app.logger.warning("[upload-pdf] 400: Missing course name")
             return jsonify({'error': 'Course name is required'}), 400
 
-        if not file.filename or not file.filename.lower().endswith('.pdf'):
-            return jsonify({'error': 'Only PDF files are accepted'}), 400
+        # Accept by MIME type OR by extension — handles renamed/mobile files
+        filename_lower = (file.filename or '').lower()
+        mime = (file.content_type or '').lower()
+        is_pdf_ext  = filename_lower.endswith('.pdf')
+        is_pdf_mime = 'pdf' in mime
+        is_no_name  = not file.filename  # some mobile browsers send no filename
+
+        if not (is_pdf_ext or is_pdf_mime):
+            app.logger.warning(f"[upload-pdf] 400: Rejected file — filename={file.filename!r} mime={mime!r}")
+            return jsonify({
+                'error': f'Only PDF files are accepted. Got: {file.filename or "unnamed"} ({mime or "unknown type"})'
+            }), 400
 
         file_bytes = file.read()
         if len(file_bytes) == 0:
+            app.logger.warning("[upload-pdf] 400: Empty file")
             return jsonify({'error': 'Uploaded file is empty'}), 400
+
+        # Verify it actually starts with a PDF header
+        if not file_bytes.startswith(b'%PDF'):
+            app.logger.warning(f"[upload-pdf] 400: File does not start with %PDF header. First 8 bytes: {file_bytes[:8]!r}")
+            return jsonify({'error': 'The uploaded file does not appear to be a valid PDF.'}), 400
 
         # Extract text
         try:
@@ -240,8 +260,8 @@ def register_routes(app: Flask):
             return jsonify({'error': str(e)}), 422
 
         # Chunk for AI
-        # Chunk size is provider-aware (Groq: 7k chars, others: 10k)
-        chunked_text = chunk_text(text)
+        # ai_service handles chunking internally based on provider limits
+        chunked_text = text
 
         # Get or create course
         existing = Course.query.filter(
