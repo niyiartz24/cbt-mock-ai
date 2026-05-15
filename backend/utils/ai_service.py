@@ -95,16 +95,16 @@ def _call_ai(prompt: str, temperature: float, max_tokens: int) -> str:
 def _extract_json_array(raw: str) -> list:
     """
     Robustly extract a JSON array from AI response.
-    Handles: markdown fences, thinking tags, preamble text,
-    nested content, and Gemini 2.5's verbose reasoning output.
+    Handles: markdown fences, thinking tags, preamble, truncated responses.
+    If response is cut off mid-array, salvages all complete objects.
     """
     if not raw:
         raise ValueError("AI returned empty response")
 
     print(f"[AI] Raw response length: {len(raw)} chars")
-    print(f"[AI] Raw response preview: {raw[:300]}")
+    print(f"[AI] Raw response preview: {raw[:200]}")
 
-    # Step 1: Strip <think>...</think> blocks (Gemini 2.5 reasoning output)
+    # Step 1: Strip thinking blocks
     text = re.sub(r'<think>.*?</think>', '', raw, flags=re.DOTALL | re.IGNORECASE)
 
     # Step 2: Strip markdown fences
@@ -112,26 +112,33 @@ def _extract_json_array(raw: str) -> list:
     text = re.sub(r'```\s*', '', text)
     text = text.strip()
 
-    # Step 3: Try parsing the whole cleaned string
+    # Step 3: Find the start of the JSON array
+    start = text.find('[')
+    if start == -1:
+        raise ValueError(f"No JSON array found. Preview: {text[:300]}")
+
+    array_text = text[start:]
+
+    # Step 4: Try parsing the full array
+    clean = re.sub(r',\s*([}\]])', r'\1', array_text)
     try:
-        result = json.loads(text)
+        result = json.loads(clean)
         if isinstance(result, list):
-            print(f"[AI] JSON parsed directly: {len(result)} items")
+            print(f"[AI] JSON parsed fully: {len(result)} items")
             return result
     except json.JSONDecodeError:
         pass
 
-    # Step 4: Find JSON array using bracket matching
-    start = text.find('[')
-    if start == -1:
-        raise ValueError(f"No JSON array found in response. Preview: {text[:300]}")
-
+    # Step 5: Response was truncated — salvage complete objects
+    # Extract every complete {...} object from the array
+    print(f"[AI] Response truncated — salvaging complete objects...")
+    objects = []
     depth = 0
     in_string = False
     escape_next = False
-    end = -1
+    obj_start = -1
 
-    for i, ch in enumerate(text[start:], start):
+    for i, ch in enumerate(array_text):
         if escape_next:
             escape_next = False
             continue
@@ -143,32 +150,29 @@ def _extract_json_array(raw: str) -> list:
             continue
         if in_string:
             continue
-        if ch == '[':
-            depth += 1
-        elif ch == ']':
-            depth -= 1
+
+        if ch == '{':
             if depth == 0:
-                end = i + 1
-                break
+                obj_start = i
+            depth += 1
+        elif ch == '}':
+            depth -= 1
+            if depth == 0 and obj_start != -1:
+                obj_str = array_text[obj_start:i+1]
+                obj_str = re.sub(r',\s*}', '}', obj_str)
+                try:
+                    obj = json.loads(obj_str)
+                    if isinstance(obj, dict):
+                        objects.append(obj)
+                except json.JSONDecodeError:
+                    pass
+                obj_start = -1
 
-    if end == -1:
-        raise ValueError(f"Incomplete JSON array in response. Preview: {text[start:start+300]}")
+    if objects:
+        print(f"[AI] Salvaged {len(objects)} complete objects from truncated response")
+        return objects
 
-    json_str = text[start:end]
-
-    # Step 5: Clean common AI formatting issues inside the JSON
-    # Remove trailing commas before ] or }
-    json_str = re.sub(r',\s*([}\]])', r'\1', json_str)
-
-    try:
-        result = json.loads(json_str)
-        if isinstance(result, list):
-            print(f"[AI] JSON extracted via bracket matching: {len(result)} items")
-            return result
-    except json.JSONDecodeError as e:
-        raise ValueError(f"JSON parse failed: {e}. Extracted: {json_str[:300]}")
-
-    raise ValueError("Could not extract valid JSON array from response")
+    raise ValueError(f"Could not extract any valid objects. Preview: {array_text[:300]}")
 
 
 def _clean_html(raw: str) -> str:
@@ -306,7 +310,7 @@ def generate_questions(text: str, course_name: str, api_key: str = '') -> Tuple[
         prompt = _questions_prompt(chunk, course_name, count=questions_per_chunk)
 
         try:
-            raw = _call_ai(prompt, temperature=0.6, max_tokens=8000)
+            raw = _call_ai(prompt, temperature=0.6, max_tokens=16000)
             raw_list = _extract_json_array(raw)
             chunk_qs = _validate_questions(raw_list)
         except Exception as e:
