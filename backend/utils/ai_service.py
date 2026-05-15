@@ -30,12 +30,20 @@ def _call_openai_compatible(api_key: str, base_url: str, model: str,
         provider = 'GROQ' if 'groq' in base_url else 'GEMINI'
         raise ValueError(f"{provider}_API_KEY is not set in your .env file.")
     client = OpenAI(api_key=api_key, base_url=base_url)
-    response = client.chat.completions.create(
+
+    kwargs = dict(
         model=model,
         messages=[{"role": "user", "content": prompt}],
         temperature=temperature,
         max_tokens=max_tokens,
     )
+
+    # Disable Gemini 2.5 thinking to avoid long reasoning delays and token waste.
+    # thinking_budget=0 keeps responses fast — identical quality for structured tasks.
+    if 'generativelanguage.googleapis.com' in base_url:
+        kwargs['extra_body'] = {"thinking": {"thinking_budget": 0}}
+
+    response = client.chat.completions.create(**kwargs)
     return response.choices[0].message.content
 
 
